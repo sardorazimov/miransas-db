@@ -1,1 +1,0 @@
-pub async fn login() -> &'static str { "Auth system ready" }

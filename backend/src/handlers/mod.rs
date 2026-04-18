@@ -1,3 +1,5 @@
-pub mod project;
-pub mod query;
-pub mod auth;
+pub mod admin;
+pub mod databases;
+pub mod health;
+pub mod projects;
+pub mod secrets;
