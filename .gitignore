@@ -1,1 +1,12 @@
 /target
+# Root
+.DS_Store
+.env
+
+# Backend
+backend/target/
+backend/.env
+
+# Frontend
+frontend/.next/
+frontend/node_modules/

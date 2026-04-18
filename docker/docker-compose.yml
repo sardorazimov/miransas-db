@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  miransas-db-postgres:
+    image: postgres:15-alpine
+    container_name: miransas-db
+    restart: always
+    environment:
+      POSTGRES_USER: sardor
+      POSTGRES_PASSWORD: Mir@2001_2021_2023ms
+      POSTGRES_DB: miransas_main
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data:/var/lib/postgresql/data # Verilerin silinmemesi için persistency
+    networks:
+      - miransas_network
+
+networks:
+  miransas_network:
+    driver: bridge
