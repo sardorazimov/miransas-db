@@ -8,7 +8,7 @@ mod shared;
 
 pub use admin::admin_summary;
 pub use audit::list_audit_logs;
-pub use databases::{create_database, list_databases};
+pub use databases::{create_database, delete_database, list_databases, update_database};
 pub use projects::{
     create_project, delete_project, delete_project_row, execute_project_query,
     get_project_table_data, list_project_tables, list_projects, update_project,

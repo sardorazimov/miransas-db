@@ -78,6 +78,12 @@ pub fn build_router(state: AppState) -> Router {
             "/databases",
             get(handlers::databases::list_databases).post(handlers::databases::create_database),
         )
+        // PUT    /api/databases/:id
+        // DELETE /api/databases/:id
+        .route(
+            "/databases/:id",
+            put(handlers::databases::update_database).delete(handlers::databases::delete_database),
+        )
         .route(
             "/databases/:id/tables",
             get(handlers::databases::list_tables),

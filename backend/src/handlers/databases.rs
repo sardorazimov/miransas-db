@@ -9,11 +9,31 @@ use crate::{
     errors::AppError,
     models::{
         CreateDatabaseRequest, DatabaseMetadata, PaginationQuery, QueryRequest, QueryResult,
-        TableDataResponse, TableInfo,
+        TableDataResponse, TableInfo, UpdateDatabaseRequest,
     },
     services,
     state::AppState,
 };
+
+/// PUT /api/databases/:id
+pub async fn update_database(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<UpdateDatabaseRequest>,
+) -> Result<Json<DatabaseMetadata>, AppError> {
+    Ok(Json(
+        services::update_database(&state.pool, &state.config.secret_key, id, input).await?,
+    ))
+}
+
+/// DELETE /api/databases/:id — returns 204, 404 if not found
+pub async fn delete_database(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    services::delete_database(&state.pool, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
 
 pub async fn list_databases(
     State(state): State<AppState>,
