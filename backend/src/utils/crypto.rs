@@ -77,3 +77,32 @@ fn random_nonce() -> Result<[u8; NONCE_LEN], CryptoError> {
     getrandom::getrandom(&mut nonce).map_err(|_| CryptoError::Random)?;
     Ok(nonce)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KEY: &str = "test-secret-key-with-at-least-32c!";
+
+    /// encrypt then decrypt must recover the original plaintext.
+    #[test]
+    fn round_trip() {
+        let plaintext = "postgres://user:pass@localhost:5432/mydb";
+        let ciphertext = encrypt(KEY, plaintext).expect("encrypt failed");
+        let recovered = decrypt(KEY, &ciphertext).expect("decrypt failed");
+        assert_eq!(recovered, plaintext);
+    }
+
+    /// Two encryptions of the same plaintext must produce different ciphertexts
+    /// because each call uses a freshly generated random nonce.
+    #[test]
+    fn same_plaintext_produces_different_ciphertexts() {
+        let plaintext = "secret-value";
+        let first = encrypt(KEY, plaintext).expect("first encrypt failed");
+        let second = encrypt(KEY, plaintext).expect("second encrypt failed");
+        assert_ne!(first, second, "ciphertexts must differ due to random nonce");
+        // Both must still decrypt correctly.
+        assert_eq!(decrypt(KEY, &first).unwrap(), plaintext);
+        assert_eq!(decrypt(KEY, &second).unwrap(), plaintext);
+    }
+}
