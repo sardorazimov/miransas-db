@@ -7,11 +7,11 @@ use crate::{
     utils::crypto,
 };
 
+use super::query::{rows_as_json, run_sql};
 use super::shared::{
     empty_to_none, insert_audit_log, required_text, split_schema_table, validate_and_quote,
     validate_and_quote_col,
 };
-use super::query::{rows_as_json, run_sql};
 
 // ── CRUD ──────────────────────────────────────────────────────────────────────
 
@@ -117,10 +117,9 @@ pub async fn get_project_table_data(
     let offset = (page - 1) * page_size;
 
     // Total row count.
-    let total: i64 =
-        sqlx::query_scalar(&format!("SELECT COUNT(*)::BIGINT FROM {quoted}"))
-            .fetch_one(&mut conn)
-            .await?;
+    let total: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*)::BIGINT FROM {quoted}"))
+        .fetch_one(&mut conn)
+        .await?;
 
     // Rows serialised as JSON by Postgres.
     let rows_raw: Vec<String> = sqlx::query_scalar(&format!(
@@ -206,10 +205,7 @@ pub async fn delete_project_row(
     // Cast the PK column to TEXT so this works for UUID, INT, BIGINT, and TEXT PKs
     // without knowing the column type at compile time.
     let sql = format!("DELETE FROM {quoted_table} WHERE {quoted_pk}::TEXT = $1");
-    let result = sqlx::query(&sql)
-        .bind(row_id)
-        .execute(&mut conn)
-        .await?;
+    let result = sqlx::query(&sql).bind(row_id).execute(&mut conn).await?;
 
     let affected = result.rows_affected();
     if affected == 0 {
@@ -223,7 +219,9 @@ pub async fn delete_project_row(
         "delete_row",
         "project",
         Some(project_id),
-        Some(format!("deleted row from {table} where {pk_col} = {row_id}")),
+        Some(format!(
+            "deleted row from {table} where {pk_col} = {row_id}"
+        )),
     )
     .await?;
 
@@ -240,16 +238,13 @@ async fn project_connection_url(
     project_id: Uuid,
     secret_key: &str,
 ) -> Result<String, AppError> {
-    let row =
-        sqlx::query("SELECT connection_string_encrypted FROM projects WHERE id = $1")
-            .bind(project_id)
-            .fetch_optional(pool)
-            .await?
-            .ok_or_else(|| AppError::NotFound(format!("project {project_id} not found")))?;
+    let row = sqlx::query("SELECT connection_string_encrypted FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("project {project_id} not found")))?;
 
-    let encrypted: Option<String> = row
-        .try_get("connection_string_encrypted")
-        .unwrap_or(None);
+    let encrypted: Option<String> = row.try_get("connection_string_encrypted").unwrap_or(None);
 
     let encrypted = encrypted.ok_or_else(|| {
         AppError::BadRequest(

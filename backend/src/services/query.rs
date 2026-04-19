@@ -10,9 +10,7 @@ use crate::{
     utils::crypto,
 };
 
-use super::shared::{
-    insert_audit_log, split_schema_table, validate_and_quote,
-};
+use super::shared::{insert_audit_log, split_schema_table, validate_and_quote};
 
 // ── Public surface ────────────────────────────────────────────────────────────
 
@@ -58,10 +56,9 @@ pub async fn get_table_data(
     let page = page.max(1);
     let offset = (page - 1) * page_size;
 
-    let total: i64 =
-        sqlx::query_scalar(&format!("SELECT COUNT(*)::BIGINT FROM {quoted}"))
-            .fetch_one(&mut conn)
-            .await?;
+    let total: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*)::BIGINT FROM {quoted}"))
+        .fetch_one(&mut conn)
+        .await?;
 
     let rows_raw: Vec<String> = sqlx::query_scalar(&format!(
         "SELECT row_to_json(_t)::TEXT \
@@ -83,7 +80,13 @@ pub async fn get_table_data(
     .unwrap_or_default();
 
     let rows = rows_as_json(rows_raw);
-    Ok(TableDataResponse { columns, rows, total, page, page_size })
+    Ok(TableDataResponse {
+        columns,
+        rows,
+        total,
+        page,
+        page_size,
+    })
 }
 
 pub async fn execute_query(
@@ -138,20 +141,14 @@ pub(super) async fn run_sql(
     conn: &mut sqlx::postgres::PgConnection,
     sql: &str,
 ) -> Result<QueryResult, AppError> {
-    let first_word = sql
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_uppercase();
+    let first_word = sql.split_whitespace().next().unwrap_or("").to_uppercase();
 
     if matches!(
         first_word.as_str(),
         "SELECT" | "WITH" | "VALUES" | "TABLE" | "EXPLAIN"
     ) {
         let wrapped = format!("SELECT row_to_json(_q)::TEXT FROM ({sql}) _q LIMIT 10000");
-        let rows_raw: Vec<String> = sqlx::query_scalar(&wrapped)
-            .fetch_all(&mut *conn)
-            .await?;
+        let rows_raw: Vec<String> = sqlx::query_scalar(&wrapped).fetch_all(&mut *conn).await?;
 
         let rows = rows_as_json(rows_raw);
         let columns: Vec<String> = rows

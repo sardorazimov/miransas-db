@@ -18,9 +18,7 @@ use crate::{
 // ── CRUD ──────────────────────────────────────────────────────────────────────
 
 /// GET /api/projects
-pub async fn list_projects(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<Project>>, AppError> {
+pub async fn list_projects(State(state): State<AppState>) -> Result<Json<Vec<Project>>, AppError> {
     Ok(Json(services::list_projects(&state.pool).await?))
 }
 
@@ -32,9 +30,7 @@ pub async fn create_project(
 ) -> Result<(StatusCode, Json<Project>), AppError> {
     Ok((
         StatusCode::CREATED,
-        Json(
-            services::create_project(&state.pool, &state.config.secret_key, input).await?,
-        ),
+        Json(services::create_project(&state.pool, &state.config.secret_key, input).await?),
     ))
 }
 

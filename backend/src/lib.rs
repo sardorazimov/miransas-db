@@ -48,14 +48,10 @@ pub fn build_router(state: AppState) -> Router {
         // POST /api/projects          { name, connection_string, description?, repository_url? }
         .route(
             "/projects",
-            get(handlers::projects::list_projects)
-                .post(handlers::projects::create_project),
+            get(handlers::projects::list_projects).post(handlers::projects::create_project),
         )
         // GET  /api/projects/:id/tables
-        .route(
-            "/projects/:id/tables",
-            get(handlers::projects::list_tables),
-        )
+        .route("/projects/:id/tables", get(handlers::projects::list_tables))
         // GET  /api/projects/:id/tables/:table?page=1&limit=50
         .route(
             "/projects/:id/tables/:table",
@@ -74,8 +70,7 @@ pub fn build_router(state: AppState) -> Router {
         // ── Databases (connection-URL registry) ────────────────────────────
         .route(
             "/databases",
-            get(handlers::databases::list_databases)
-                .post(handlers::databases::create_database),
+            get(handlers::databases::list_databases).post(handlers::databases::create_database),
         )
         .route(
             "/databases/:id/tables",
@@ -92,8 +87,7 @@ pub fn build_router(state: AppState) -> Router {
         // ── Secrets ────────────────────────────────────────────────────────
         .route(
             "/secrets",
-            get(handlers::secrets::list_secrets)
-                .post(handlers::secrets::create_secret),
+            get(handlers::secrets::list_secrets).post(handlers::secrets::create_secret),
         )
         // ── Admin ──────────────────────────────────────────────────────────
         .route("/admin/summary", get(handlers::admin::summary))
