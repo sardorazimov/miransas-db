@@ -149,6 +149,25 @@ pub struct AuditLog {
     pub created_at: DateTime<Utc>,
 }
 
+/// Query params for GET /api/audit-logs
+#[derive(Debug, Deserialize)]
+pub struct AuditLogQuery {
+    pub page: Option<i64>,
+    pub limit: Option<i64>,
+    pub resource_type: Option<String>,
+    pub resource_id: Option<Uuid>,
+}
+
+impl AuditLogQuery {
+    pub fn resolved_page(&self) -> i64 {
+        self.page.unwrap_or(1).max(1)
+    }
+
+    pub fn resolved_limit(&self) -> i64 {
+        self.limit.unwrap_or(50).clamp(1, 200)
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct HealthResponse {
     pub status: &'static str,

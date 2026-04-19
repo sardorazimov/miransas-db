@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod audit;
 pub mod auth;
 pub mod databases;
 pub mod health;

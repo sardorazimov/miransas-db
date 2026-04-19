@@ -1,0 +1,18 @@
+# cargo-nextest configuration
+# Install: cargo install cargo-nextest --locked
+# Run:     cargo nextest run   (from backend/)
+# Docs: https://nexte.st/book/configuration
+
+[profile.default]
+retries          = 1          # retry flaky tests once
+test-threads     = "num-cpus" # parallelism
+fail-fast        = false      # run all tests even after a failure
+slow-timeout     = { period = "30s", terminate-after = 2 }
+
+[profile.ci]
+retries          = 2
+fail-fast        = true
+slow-timeout     = { period = "60s", terminate-after = 2 }
+
+[profile.default.junit]
+path = "test-results/nextest.xml"

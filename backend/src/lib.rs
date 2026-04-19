@@ -89,6 +89,9 @@ pub fn build_router(state: AppState) -> Router {
             "/secrets",
             get(handlers::secrets::list_secrets).post(handlers::secrets::create_secret),
         )
+        // ── Audit logs ─────────────────────────────────────────────────────
+        // GET /api/audit-logs?page=1&limit=50&resource_type=...&resource_id=...
+        .route("/audit-logs", get(handlers::audit::list_audit_logs))
         // ── Admin ──────────────────────────────────────────────────────────
         .route("/admin/summary", get(handlers::admin::summary))
         // Every /api/* route requires a valid JWT

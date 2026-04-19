@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema",
+  "description": "API endpoint reference consumed by the frontend and tooling.",
+
+  "environments": {
+    "local": {
+      "baseUrl": "http://localhost:3001",
+      "corsOrigin": "http://localhost:3000"
+    },
+    "production": {
+      "baseUrl": "https://api.miransas.com",
+      "corsOrigin": "https://miransas.com"
+    }
+  },
+
+  "auth": {
+    "tokenKey": "miransas_token",
+    "tokenType": "Bearer",
+    "expiresIn": 86400
+  },
+
+  "endpoints": {
+    "login":           { "method": "POST",   "path": "/auth/login",                          "auth": false },
+    "health":          { "method": "GET",    "path": "/health",                               "auth": false },
+
+    "listProjects":    { "method": "GET",    "path": "/api/projects",                         "auth": true  },
+    "createProject":   { "method": "POST",   "path": "/api/projects",                         "auth": true  },
+    "listTables":      { "method": "GET",    "path": "/api/projects/:id/tables",              "auth": true  },
+    "getTableData":    { "method": "GET",    "path": "/api/projects/:id/tables/:table",       "auth": true  },
+    "executeQuery":    { "method": "POST",   "path": "/api/projects/:id/query",               "auth": true  },
+    "deleteRow":       { "method": "DELETE", "path": "/api/projects/:id/tables/:table/:rowId","auth": true  },
+
+    "adminSummary":    { "method": "GET",    "path": "/api/admin/summary",                    "auth": true  }
+  }
+}
