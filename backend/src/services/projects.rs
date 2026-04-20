@@ -1,4 +1,5 @@
-use sqlx::{Connection, PgPool, Row};
+use sqlx::{PgPool, Row};
+use std::time::Instant;
 use uuid::Uuid;
 
 use crate::{
@@ -7,132 +8,258 @@ use crate::{
         CreateProjectRequest, Project, QueryResult, TableDataResponse, TableInfo,
         UpdateProjectRequest,
     },
-    utils::crypto,
 };
 
-use super::query::{rows_as_json, run_sql};
 use super::shared::{
-    empty_to_none, insert_audit_log, required_text, split_schema_table, validate_and_quote,
-    validate_and_quote_col,
+    empty_to_none, ensure_safe_ident, generate_schema_name, get_schema_name, insert_audit_log,
+    required_text,
 };
+
+// ── SQL helpers ───────────────────────────────────────────────────────────────
+
+fn rows_as_json(raw: Vec<String>) -> Vec<serde_json::Value> {
+    raw.iter()
+        .filter_map(|s| serde_json::from_str(s).ok())
+        .collect()
+}
+
+async fn run_sql(
+    conn: &mut sqlx::postgres::PgConnection,
+    sql: &str,
+) -> Result<QueryResult, AppError> {
+    let first_word = sql.split_whitespace().next().unwrap_or("").to_uppercase();
+
+    if matches!(
+        first_word.as_str(),
+        "SELECT" | "WITH" | "VALUES" | "TABLE" | "EXPLAIN"
+    ) {
+        let wrapped = format!("SELECT row_to_json(_q)::TEXT FROM ({sql}) _q LIMIT 10000");
+        let rows_raw: Vec<String> = sqlx::query_scalar(&wrapped).fetch_all(&mut *conn).await?;
+        let rows = rows_as_json(rows_raw);
+        let columns: Vec<String> = rows
+            .first()
+            .and_then(|r| r.as_object())
+            .map(|o| o.keys().cloned().collect())
+            .unwrap_or_default();
+        let count = rows.len();
+        Ok(QueryResult {
+            columns,
+            rows,
+            rows_affected: None,
+            message: format!("{count} rows returned"),
+        })
+    } else {
+        let result = sqlx::query(sql).execute(&mut *conn).await?;
+        let affected = result.rows_affected();
+        Ok(QueryResult {
+            columns: vec![],
+            rows: vec![],
+            rows_affected: Some(affected),
+            message: format!("{affected} rows affected"),
+        })
+    }
+}
+
+async fn insert_audit_log_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    action: &str,
+    resource_type: &str,
+    resource_id: Option<Uuid>,
+    message: Option<String>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO audit_logs (action, resource_type, resource_id, message) \
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(action)
+    .bind(resource_type)
+    .bind(resource_id)
+    .bind(message)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
 
 // ── CRUD ──────────────────────────────────────────────────────────────────────
 
 pub async fn list_projects(pool: &PgPool) -> Result<Vec<Project>, AppError> {
     let projects = sqlx::query_as::<_, Project>(
-        r#"
-        SELECT id, name, description, repository_url, created_at, updated_at
-        FROM   projects
-        ORDER  BY created_at DESC
-        "#,
+        "SELECT id, name, description, repository_url, schema_name, created_at, updated_at \
+         FROM projects ORDER BY created_at DESC",
     )
     .fetch_all(pool)
     .await?;
-
     Ok(projects)
 }
 
-/// Create a project and, if `connection_string` is provided, encrypt and store it.
+pub async fn get_project(pool: &PgPool, id: Uuid) -> Result<Project, AppError> {
+    sqlx::query_as::<_, Project>(
+        "SELECT id, name, description, repository_url, schema_name, created_at, updated_at \
+         FROM projects WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("project {id} not found")))
+}
+
 pub async fn create_project(
     pool: &PgPool,
-    secret_key: &str,
     input: CreateProjectRequest,
 ) -> Result<Project, AppError> {
     let name = required_text("name", input.name)?;
+    let schema_name = generate_schema_name(pool, &name).await?;
+    ensure_safe_ident(&schema_name)?;
 
-    let conn_enc = input
-        .connection_string
-        .filter(|s| !s.trim().is_empty())
-        .map(|s| crypto::encrypt(secret_key, s.trim()))
-        .transpose()?;
+    let mut tx = pool.begin().await?;
 
     let project = sqlx::query_as::<_, Project>(
-        r#"
-        INSERT INTO projects (name, description, repository_url, connection_string_encrypted)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id, name, description, repository_url, created_at, updated_at
-        "#,
+        "INSERT INTO projects (name, description, repository_url, schema_name) \
+         VALUES ($1, $2, $3, $4) \
+         RETURNING id, name, description, repository_url, schema_name, created_at, updated_at",
     )
     .bind(&name)
     .bind(empty_to_none(input.description))
     .bind(empty_to_none(input.repository_url))
-    .bind(conn_enc)
-    .fetch_one(pool)
+    .bind(&schema_name)
+    .fetch_one(&mut *tx)
     .await?;
 
-    insert_audit_log(
-        pool,
+    sqlx::query(&format!("CREATE SCHEMA \"{}\"", schema_name))
+        .execute(&mut *tx)
+        .await?;
+
+    insert_audit_log_tx(
+        &mut tx,
         "create",
         "project",
         Some(project.id),
-        Some(format!("created project {name}")),
+        Some(format!("created project {}", project.name)),
+    )
+    .await?;
+
+    tx.commit().await?;
+    Ok(project)
+}
+
+pub async fn update_project(
+    pool: &PgPool,
+    id: Uuid,
+    input: UpdateProjectRequest,
+) -> Result<Project, AppError> {
+    let new_name = input
+        .name
+        .and_then(|n| if n.trim().is_empty() { None } else { Some(n.trim().to_string()) });
+
+    let project = sqlx::query_as::<_, Project>(
+        r#"
+        UPDATE projects
+        SET    name            = COALESCE($2, name),
+               description    = COALESCE($3, description),
+               repository_url = COALESCE($4, repository_url)
+        WHERE  id = $1
+        RETURNING id, name, description, repository_url, schema_name, created_at, updated_at
+        "#,
+    )
+    .bind(id)
+    .bind(new_name)
+    .bind(empty_to_none(input.description))
+    .bind(empty_to_none(input.repository_url))
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("project {id} not found")))?;
+
+    insert_audit_log(
+        pool,
+        "update",
+        "project",
+        Some(id),
+        Some(format!("updated project {}", project.name)),
     )
     .await?;
 
     Ok(project)
 }
 
-// ── Project-database exploration ──────────────────────────────────────────────
+pub async fn delete_project(pool: &PgPool, id: Uuid) -> Result<(), AppError> {
+    let mut tx = pool.begin().await?;
 
-/// List all user-visible tables in the project's database.
+    let row = sqlx::query("SELECT schema_name FROM projects WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("project {id} not found")))?;
+
+    let schema_name: String = row.try_get("schema_name")?;
+
+    sqlx::query(&format!("DROP SCHEMA \"{}\" CASCADE", schema_name))
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("DELETE FROM projects WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+    insert_audit_log_tx(
+        &mut tx,
+        "delete",
+        "project",
+        Some(id),
+        Some(format!("deleted project {id}")),
+    )
+    .await?;
+
+    tx.commit().await?;
+    Ok(())
+}
+
+// ── Table exploration ─────────────────────────────────────────────────────────
+
 pub async fn list_project_tables(
     pool: &PgPool,
     project_id: Uuid,
-    secret_key: &str,
 ) -> Result<Vec<TableInfo>, AppError> {
-    let url = project_connection_url(pool, project_id, secret_key).await?;
-    let mut conn = sqlx::postgres::PgConnection::connect(&url).await?;
+    let schema_name = get_schema_name(pool, project_id).await?;
 
     let tables = sqlx::query_as::<_, TableInfo>(
-        r#"
-        SELECT table_schema AS schema,
-               table_name   AS name,
-               table_type
-        FROM   information_schema.tables
-        WHERE  table_schema NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
-        ORDER  BY table_schema, table_name
-        "#,
+        "SELECT table_schema AS schema, table_name AS name, table_type \
+         FROM information_schema.tables \
+         WHERE table_schema = $1 \
+         ORDER BY table_name",
     )
-    .fetch_all(&mut conn)
+    .bind(&schema_name)
+    .fetch_all(pool)
     .await?;
 
     Ok(tables)
 }
 
-/// Return paginated rows from a table in the project's database.
-///
-/// `table` accepts `"table_name"` (defaults to schema `public`) or
-/// `"schema.table_name"`.
 pub async fn get_project_table_data(
     pool: &PgPool,
     project_id: Uuid,
     table: &str,
     page: i64,
     page_size: i64,
-    secret_key: &str,
 ) -> Result<TableDataResponse, AppError> {
-    let quoted = validate_and_quote(table)?;
-    let (schema_name, table_name) = split_schema_table(table);
-
-    let url = project_connection_url(pool, project_id, secret_key).await?;
-    let mut conn = sqlx::postgres::PgConnection::connect(&url).await?;
+    let schema_name = get_schema_name(pool, project_id).await?;
+    ensure_safe_ident(table)?;
+    let quoted = format!("\"{}\".\"{}\"", schema_name, table);
 
     let offset = (page - 1) * page_size;
 
-    // Total row count.
-    let total: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*)::BIGINT FROM {quoted}"))
-        .fetch_one(&mut conn)
-        .await?;
+    let total: i64 =
+        sqlx::query_scalar(&format!("SELECT COUNT(*)::BIGINT FROM {quoted}"))
+            .fetch_one(pool)
+            .await?;
 
-    // Rows serialised as JSON by Postgres.
     let rows_raw: Vec<String> = sqlx::query_scalar(&format!(
         "SELECT row_to_json(_t)::TEXT \
          FROM (SELECT * FROM {quoted} LIMIT {page_size} OFFSET {offset}) _t"
     ))
-    .fetch_all(&mut conn)
+    .fetch_all(pool)
     .await?;
 
-    // Column names (ordered) from information_schema.
     let columns: Vec<String> = sqlx::query_scalar(
         "SELECT column_name::TEXT \
          FROM information_schema.columns \
@@ -140,8 +267,8 @@ pub async fn get_project_table_data(
          ORDER BY ordinal_position",
     )
     .bind(&schema_name)
-    .bind(&table_name)
-    .fetch_all(&mut conn)
+    .bind(table)
+    .fetch_all(pool)
     .await
     .unwrap_or_default();
 
@@ -154,61 +281,79 @@ pub async fn get_project_table_data(
     })
 }
 
-/// Execute arbitrary SQL against the project's database and return results as JSON.
-///
-/// - SELECT / WITH / EXPLAIN → up to 10 000 rows as JSON
-/// - Everything else → rows_affected count
-///
-/// The full query (truncated to 500 chars) is written to the audit log.
 pub async fn execute_project_query(
     pool: &PgPool,
     project_id: Uuid,
     sql: &str,
-    secret_key: &str,
 ) -> Result<QueryResult, AppError> {
     let sql = sql.trim();
     if sql.is_empty() {
         return Err(AppError::BadRequest("sql must not be empty".to_string()));
     }
 
-    insert_audit_log(
-        pool,
-        "execute_query",
-        "project",
-        Some(project_id),
-        Some(format!("SQL: {}", &sql[..sql.len().min(500)])),
-    )
+    let schema_name = get_schema_name(pool, project_id).await?;
+
+    let start = Instant::now();
+    let mut conn = pool.acquire().await?;
+
+    sqlx::query(&format!(
+        "SET LOCAL search_path TO \"{}\", public",
+        schema_name
+    ))
+    .execute(&mut *conn)
     .await?;
 
-    let url = project_connection_url(pool, project_id, secret_key).await?;
-    let mut conn = sqlx::postgres::PgConnection::connect(&url).await?;
+    let result = run_sql(&mut conn, sql).await;
+    let duration_ms = start.elapsed().as_millis() as i32;
 
-    run_sql(&mut conn, sql).await
+    let (success, err_msg, query_result) = match result {
+        Ok(qr) => (true, None, Ok(qr)),
+        Err(e) => {
+            let msg = e.to_string();
+            (false, Some(msg.clone()), Err(e))
+        }
+    };
+
+    let rows_affected: Option<i64> = query_result
+        .as_ref()
+        .ok()
+        .and_then(|qr| qr.rows_affected.map(|n| n as i64));
+
+    let truncated: String = sql.chars().take(10000).collect();
+
+    let _ = sqlx::query(
+        "INSERT INTO query_history \
+         (project_id, sql, duration_ms, rows_affected, success, error_message) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(project_id)
+    .bind(truncated)
+    .bind(duration_ms)
+    .bind(rows_affected)
+    .bind(success)
+    .bind(err_msg)
+    .execute(pool)
+    .await;
+
+    query_result
 }
 
-/// Delete a single row from a table in the project's database.
-///
-/// `pk_col` is the primary-key column name (default `"id"`).
-/// `row_id` is the value cast to text for comparison.
-/// Returns 404 when no row was deleted.
 pub async fn delete_project_row(
     pool: &PgPool,
     project_id: Uuid,
     table: &str,
     pk_col: &str,
     row_id: &str,
-    secret_key: &str,
 ) -> Result<u64, AppError> {
-    let quoted_table = validate_and_quote(table)?;
-    let quoted_pk = validate_and_quote_col(pk_col)?;
+    let schema_name = get_schema_name(pool, project_id).await?;
+    ensure_safe_ident(table)?;
+    ensure_safe_ident(pk_col)?;
 
-    let url = project_connection_url(pool, project_id, secret_key).await?;
-    let mut conn = sqlx::postgres::PgConnection::connect(&url).await?;
-
-    // Cast the PK column to TEXT so this works for UUID, INT, BIGINT, and TEXT PKs
-    // without knowing the column type at compile time.
-    let sql = format!("DELETE FROM {quoted_table} WHERE {quoted_pk}::TEXT = $1");
-    let result = sqlx::query(&sql).bind(row_id).execute(&mut conn).await?;
+    let sql = format!(
+        "DELETE FROM \"{}\".\"{}\" WHERE \"{}\"::TEXT = $1",
+        schema_name, table, pk_col
+    );
+    let result = sqlx::query(&sql).bind(row_id).execute(pool).await?;
 
     let affected = result.rows_affected();
     if affected == 0 {
@@ -222,146 +367,9 @@ pub async fn delete_project_row(
         "delete_row",
         "project",
         Some(project_id),
-        Some(format!(
-            "deleted row from {table} where {pk_col} = {row_id}"
-        )),
+        Some(format!("deleted row from {table} where {pk_col} = {row_id}")),
     )
     .await?;
 
     Ok(affected)
-}
-
-/// Update a project's mutable fields. Absent fields keep their existing value;
-/// an empty string sets the field to NULL (except `name`, which must remain non-empty).
-pub async fn update_project(
-    pool: &PgPool,
-    secret_key: &str,
-    id: Uuid,
-    input: UpdateProjectRequest,
-) -> Result<Project, AppError> {
-    // A private struct so we can read the encrypted column too.
-    #[derive(sqlx::FromRow)]
-    struct ProjectFull {
-        name: String,
-        description: Option<String>,
-        repository_url: Option<String>,
-        connection_string_encrypted: Option<String>,
-    }
-
-    let existing = sqlx::query_as::<_, ProjectFull>(
-        r#"
-        SELECT name, description, repository_url, connection_string_encrypted
-        FROM   projects
-        WHERE  id = $1
-        "#,
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound(format!("project {id} not found")))?;
-
-    let name = match input.name {
-        Some(n) => required_text("name", n)?,
-        None => existing.name,
-    };
-
-    let description = if input.description.is_some() {
-        empty_to_none(input.description)
-    } else {
-        existing.description
-    };
-
-    let repository_url = if input.repository_url.is_some() {
-        empty_to_none(input.repository_url)
-    } else {
-        existing.repository_url
-    };
-
-    let connection_string_encrypted = match input.connection_string {
-        None => existing.connection_string_encrypted,
-        Some(ref s) if s.trim().is_empty() => None,
-        Some(s) => Some(crypto::encrypt(secret_key, s.trim())?),
-    };
-
-    let project = sqlx::query_as::<_, Project>(
-        r#"
-        UPDATE projects
-        SET    name = $2,
-               description = $3,
-               repository_url = $4,
-               connection_string_encrypted = $5
-        WHERE  id = $1
-        RETURNING id, name, description, repository_url, created_at, updated_at
-        "#,
-    )
-    .bind(id)
-    .bind(&name)
-    .bind(description)
-    .bind(repository_url)
-    .bind(connection_string_encrypted)
-    .fetch_one(pool)
-    .await?;
-
-    insert_audit_log(
-        pool,
-        "update",
-        "project",
-        Some(id),
-        Some(format!("updated project {name}")),
-    )
-    .await?;
-
-    Ok(project)
-}
-
-/// Delete a project by id. Returns 404 if not found.
-pub async fn delete_project(pool: &PgPool, id: Uuid) -> Result<(), AppError> {
-    let result = sqlx::query("DELETE FROM projects WHERE id = $1")
-        .bind(id)
-        .execute(pool)
-        .await?;
-
-    if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("project {id} not found")));
-    }
-
-    insert_audit_log(
-        pool,
-        "delete",
-        "project",
-        Some(id),
-        Some(format!("deleted project {id}")),
-    )
-    .await?;
-
-    Ok(())
-}
-
-// ── Private helpers ───────────────────────────────────────────────────────────
-
-/// Fetch and AES-decrypt the connection string stored for a project.
-/// Returns 404 if the project does not exist.
-/// Returns 400 if the project has no connection string stored.
-async fn project_connection_url(
-    pool: &PgPool,
-    project_id: Uuid,
-    secret_key: &str,
-) -> Result<String, AppError> {
-    let row = sqlx::query("SELECT connection_string_encrypted FROM projects WHERE id = $1")
-        .bind(project_id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("project {project_id} not found")))?;
-
-    let encrypted: Option<String> = row.try_get("connection_string_encrypted").unwrap_or(None);
-
-    let encrypted = encrypted.ok_or_else(|| {
-        AppError::BadRequest(
-            "project has no connection string stored; \
-             provide `connection_string` when creating the project"
-                .to_string(),
-        )
-    })?;
-
-    crypto::decrypt(secret_key, &encrypted).map_err(AppError::Crypto)
 }

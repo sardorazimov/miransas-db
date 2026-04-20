@@ -1,7 +1,7 @@
 use axum::{
     http::{HeaderValue, Method},
     middleware::from_fn_with_state,
-    routing::{delete, get, post, put},
+    routing::{delete, get, post},
     Router,
 };
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -44,69 +44,63 @@ pub fn build_router(state: AppState) -> Router {
 
     let api_routes = Router::new()
         // ── Projects ───────────────────────────────────────────────────────
-        // GET  /api/projects
-        // POST /api/projects          { name, connection_string, description?, repository_url? }
         .route(
             "/projects",
             get(handlers::projects::list_projects).post(handlers::projects::create_project),
         )
-        // PUT    /api/projects/:id   { name?, description?, repository_url?, connection_string? }
-        // DELETE /api/projects/:id
         .route(
             "/projects/:id",
-            put(handlers::projects::update_project).delete(handlers::projects::delete_project),
+            get(handlers::projects::get_project)
+                .put(handlers::projects::update_project)
+                .delete(handlers::projects::delete_project),
         )
-        // GET  /api/projects/:id/tables
         .route("/projects/:id/tables", get(handlers::projects::list_tables))
-        // GET  /api/projects/:id/tables/:table?page=1&limit=50
         .route(
             "/projects/:id/tables/:table",
             get(handlers::projects::get_table_data),
         )
-        // POST /api/projects/:id/query          { sql }
         .route(
             "/projects/:id/query",
             post(handlers::projects::execute_query),
         )
-        // DELETE /api/projects/:id/tables/:table/:row_id?pk=id
         .route(
             "/projects/:id/tables/:table/:row_id",
             delete(handlers::projects::delete_row),
         )
-        // ── Databases (connection-URL registry) ────────────────────────────
+        // ── User management ────────────────────────────────────────────────
         .route(
-            "/databases",
-            get(handlers::databases::list_databases).post(handlers::databases::create_database),
+            "/projects/:id/user-config",
+            get(handlers::users::get_config).put(handlers::users::put_config),
         )
-        // PUT    /api/databases/:id
-        // DELETE /api/databases/:id
+        .route("/projects/:id/users", get(handlers::users::list_users))
         .route(
-            "/databases/:id",
-            put(handlers::databases::update_database).delete(handlers::databases::delete_database),
-        )
-        .route(
-            "/databases/:id/tables",
-            get(handlers::databases::list_tables),
+            "/projects/:id/users/export",
+            get(handlers::users::export_users),
         )
         .route(
-            "/databases/:id/tables/:table",
-            get(handlers::databases::get_table_data),
+            "/projects/:id/users/:user_id",
+            get(handlers::users::get_user).delete(handlers::users::delete_user),
         )
         .route(
-            "/databases/:id/query",
-            post(handlers::databases::execute_query),
+            "/projects/:id/users/:user_id/ban",
+            post(handlers::users::ban_user),
+        )
+        .route(
+            "/projects/:id/users/:user_id/unban",
+            post(handlers::users::unban_user),
+        )
+        .route(
+            "/projects/:id/users/:user_id/password",
+            post(handlers::users::reset_password),
         )
         // ── Secrets ────────────────────────────────────────────────────────
         .route(
             "/secrets",
             get(handlers::secrets::list_secrets).post(handlers::secrets::create_secret),
         )
-        // GET    /api/secrets/:id/reveal — decrypt and return value (audit logged)
-        // DELETE /api/secrets/:id
         .route("/secrets/:id/reveal", get(handlers::secrets::reveal_secret))
         .route("/secrets/:id", delete(handlers::secrets::delete_secret))
         // ── Audit logs ─────────────────────────────────────────────────────
-        // GET /api/audit-logs?page=1&limit=50&resource_type=...&resource_id=...
         .route("/audit-logs", get(handlers::audit::list_audit_logs))
         // ── Admin ──────────────────────────────────────────────────────────
         .route("/admin/summary", get(handlers::admin::summary))
@@ -118,7 +112,6 @@ pub fn build_router(state: AppState) -> Router {
 
     Router::new()
         .route("/health", get(handlers::health::health))
-        // POST /auth/login  { password } → { token, expires_in }
         .route("/auth/login", post(handlers::auth::login))
         .nest("/api", api_routes)
         .layer(cors)

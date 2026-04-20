@@ -15,10 +15,8 @@ pub async fn insert_audit_log(
     message: Option<String>,
 ) -> Result<(), AppError> {
     sqlx::query(
-        r#"
-        INSERT INTO audit_logs (action, resource_type, resource_id, message)
-        VALUES ($1, $2, $3, $4)
-        "#,
+        "INSERT INTO audit_logs (action, resource_type, resource_id, message) \
+         VALUES ($1, $2, $3, $4)",
     )
     .bind(action)
     .bind(resource_type)
@@ -53,55 +51,81 @@ pub fn empty_to_none(value: Option<String>) -> Option<String> {
     })
 }
 
-/// Validate that an optional port number is in the TCP range 1–65535.
-pub fn validate_port(port: Option<i32>) -> Result<(), AppError> {
-    if let Some(p) = port {
-        if !(1..=65535).contains(&p) {
-            return Err(AppError::BadRequest(
-                "port must be between 1 and 65535".to_string(),
-            ));
-        }
+// ── SQL identifier safety ─────────────────────────────────────────────────────
+
+/// Validate that an identifier contains only `[a-z0-9_]` and is 1–63 chars.
+/// Does not allow uppercase — Postgres unquoted identifiers are always folded to lowercase.
+pub fn ensure_safe_ident(name: &str) -> Result<(), AppError> {
+    if name.is_empty() || name.len() > 63 {
+        return Err(AppError::BadRequest(format!(
+            "invalid identifier: {name:?} — must be 1–63 chars"
+        )));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    {
+        return Err(AppError::BadRequest(format!(
+            "identifier has invalid chars: {name:?} — only [a-z0-9_] allowed"
+        )));
     }
     Ok(())
 }
 
-// ── SQL identifier safety ─────────────────────────────────────────────────────
+// ── Schema name generation ────────────────────────────────────────────────────
 
-/// Validate a `[schema.]table` identifier and return it SQL-safe (double-quoted).
+/// Generate a safe, unique schema name for a project from its display name.
 ///
-/// Each dot-separated part must contain only ASCII alphanumerics and underscores.
-/// Returns `"schema"."table"` or `"table"`.
-pub fn validate_and_quote(name: &str) -> Result<String, AppError> {
-    let parts: Vec<&str> = name.splitn(2, '.').collect();
-    for part in &parts {
-        if part.is_empty() || !part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            return Err(AppError::BadRequest(format!(
-                "invalid identifier: {part:?} — only [a-zA-Z0-9_] and a single dot separator are allowed"
-            )));
+/// Result is always `proj_<slug>` where slug contains only `[a-z0-9_]`.
+pub async fn generate_schema_name(pool: &PgPool, name: &str) -> Result<String, AppError> {
+    let lowered = name.to_lowercase();
+    let mut cleaned = String::new();
+    let mut prev_underscore = false;
+    for c in lowered.chars() {
+        if c.is_ascii_alphanumeric() {
+            cleaned.push(c);
+            prev_underscore = false;
+        } else if !prev_underscore {
+            cleaned.push('_');
+            prev_underscore = true;
         }
     }
-    Ok(parts
-        .iter()
-        .map(|p| format!("\"{p}\""))
-        .collect::<Vec<_>>()
-        .join("."))
+    let cleaned = cleaned.trim_matches('_').to_string();
+    let cleaned = if cleaned.is_empty() {
+        "unnamed".to_string()
+    } else {
+        cleaned
+    };
+
+    let candidate = format!("proj_{cleaned}");
+
+    let mut final_name = candidate.clone();
+    let mut suffix = 2u32;
+    loop {
+        let exists: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 FROM _miransas.projects WHERE schema_name = $1",
+        )
+        .bind(&final_name)
+        .fetch_optional(pool)
+        .await?;
+
+        if exists.is_none() {
+            break;
+        }
+        final_name = format!("{}_{}", candidate, suffix);
+        suffix += 1;
+    }
+
+    Ok(final_name)
 }
 
-/// Validate a *single* identifier (no dot separator) and return it double-quoted.
-/// Used for column names.
-pub fn validate_and_quote_col(name: &str) -> Result<String, AppError> {
-    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        return Err(AppError::BadRequest(format!(
-            "invalid column name: {name:?} — only [a-zA-Z0-9_] allowed"
-        )));
-    }
-    Ok(format!("\"{name}\""))
-}
+// ── DB helpers ────────────────────────────────────────────────────────────────
 
-/// Split `"schema.table"` → `("schema", "table")`, defaulting schema to `"public"`.
-pub fn split_schema_table(name: &str) -> (String, String) {
-    match name.split_once('.') {
-        Some((s, t)) => (s.to_string(), t.to_string()),
-        None => ("public".to_string(), name.to_string()),
-    }
+/// Look up a project's schema_name. Returns NotFound if project doesn't exist.
+pub async fn get_schema_name(pool: &PgPool, project_id: Uuid) -> Result<String, AppError> {
+    sqlx::query_scalar("SELECT schema_name FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("project {project_id} not found")))
 }

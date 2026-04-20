@@ -10,6 +10,7 @@ pub struct Project {
     pub name: String,
     pub description: Option<String>,
     pub repository_url: Option<String>,
+    pub schema_name: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -19,9 +20,6 @@ pub struct CreateProjectRequest {
     pub name: String,
     pub description: Option<String>,
     pub repository_url: Option<String>,
-    /// Postgres connection string, e.g. `postgres://user:pass@host:5432/db`.
-    /// Stored AES-256-GCM encrypted; never returned in API responses.
-    pub connection_string: Option<String>,
 }
 
 /// All fields are optional. Absent = keep existing. Empty string = set to NULL.
@@ -30,54 +28,6 @@ pub struct UpdateProjectRequest {
     pub name: Option<String>,
     pub description: Option<String>,
     pub repository_url: Option<String>,
-    /// Empty string clears the stored connection string; non-empty re-encrypts.
-    pub connection_string: Option<String>,
-}
-
-/// All fields are optional. Absent = keep existing. Empty string = set to NULL.
-#[derive(Debug, Deserialize)]
-pub struct UpdateDatabaseRequest {
-    pub name: Option<String>,
-    pub engine: Option<String>,
-    pub project_id: Option<Uuid>,
-    pub host: Option<String>,
-    pub port: Option<i32>,
-    pub database_name: Option<String>,
-    pub username: Option<String>,
-    pub notes: Option<String>,
-    /// Empty string clears the stored connection URL; non-empty re-encrypts.
-    pub connection_url: Option<String>,
-}
-
-// ── Databases ─────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct DatabaseMetadata {
-    pub id: Uuid,
-    pub project_id: Option<Uuid>,
-    pub name: String,
-    pub engine: String,
-    pub host: Option<String>,
-    pub port: Option<i32>,
-    pub database_name: Option<String>,
-    pub username: Option<String>,
-    pub notes: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CreateDatabaseRequest {
-    pub project_id: Option<Uuid>,
-    pub name: String,
-    pub engine: String,
-    pub host: Option<String>,
-    pub port: Option<i32>,
-    pub database_name: Option<String>,
-    pub username: Option<String>,
-    pub notes: Option<String>,
-    /// Full connection URL stored encrypted; never returned in responses.
-    pub connection_url: Option<String>,
 }
 
 // ── Table exploration ─────────────────────────────────────────────────────────
@@ -213,8 +163,54 @@ pub struct HealthResponse {
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct AdminSummary {
     pub project_count: i64,
-    pub database_count: i64,
     pub secret_count: i64,
     pub audit_log_count: i64,
     pub generated_at: DateTime<Utc>,
+}
+
+// ── User management ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct ProjectUserConfig {
+    pub project_id: Uuid,
+    pub users_table: String,
+    pub id_column: String,
+    pub email_column: Option<String>,
+    pub username_column: Option<String>,
+    pub password_column: Option<String>,
+    pub banned_column: Option<String>,
+    pub password_algorithm: String,
+    pub searchable_columns: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PutUserConfigRequest {
+    pub users_table: String,
+    pub id_column: Option<String>,
+    pub email_column: Option<String>,
+    pub username_column: Option<String>,
+    pub password_column: Option<String>,
+    pub banned_column: Option<String>,
+    pub password_algorithm: Option<String>,
+    pub searchable_columns: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UserSearchQuery {
+    pub q: Option<String>,
+    pub page: Option<i64>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResetPasswordRequest {
+    pub new_password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExportQuery {
+    /// "csv" or "json" (default "json")
+    pub format: Option<String>,
 }
