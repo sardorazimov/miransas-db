@@ -125,6 +125,71 @@ pub async fn generate_schema_name(pool: &PgPool, name: &str) -> Result<String, A
     Ok(final_name)
 }
 
+// ── Data type / FK / index validation ────────────────────────────────────────
+
+pub fn validate_data_type(dt: &str) -> Result<String, crate::errors::AppError> {
+    let dt = dt.trim();
+    if dt.is_empty() || dt.len() > 64 {
+        return Err(crate::errors::AppError::BadRequest(
+            format!("invalid data type: {:?}", dt)
+        ));
+    }
+
+    let upper = dt.to_uppercase();
+    if !upper.chars().all(|c|
+        c.is_ascii_uppercase() || c.is_ascii_digit()
+        || c == ' ' || c == '(' || c == ')' || c == ',' || c == '[' || c == ']'
+    ) {
+        return Err(crate::errors::AppError::BadRequest(
+            format!("data type contains invalid characters: {:?}", dt)
+        ));
+    }
+
+    const ALLOWED: &[&str] = &[
+        "TEXT", "VARCHAR", "CHAR",
+        "INTEGER", "INT", "BIGINT", "SMALLINT", "SERIAL", "BIGSERIAL",
+        "NUMERIC", "DECIMAL", "REAL", "DOUBLE PRECISION",
+        "BOOLEAN", "BOOL",
+        "UUID",
+        "JSON", "JSONB",
+        "TIMESTAMP", "TIMESTAMPTZ", "TIMESTAMP WITH TIME ZONE", "TIMESTAMP WITHOUT TIME ZONE",
+        "DATE", "TIME", "INTERVAL",
+        "BYTEA",
+        "INET", "CIDR",
+    ];
+
+    let base = upper.split(['(', '[']).next().unwrap_or("").trim();
+    if !ALLOWED.contains(&base) {
+        return Err(crate::errors::AppError::BadRequest(
+            format!("unsupported data type: {:?}. allowed types: {:?}", dt, ALLOWED)
+        ));
+    }
+
+    Ok(upper)
+}
+
+pub fn validate_fk_action(action: &str) -> Result<String, crate::errors::AppError> {
+    let upper = action.trim().to_uppercase();
+    const ALLOWED: &[&str] = &["CASCADE", "SET NULL", "SET DEFAULT", "RESTRICT", "NO ACTION"];
+    if !ALLOWED.contains(&upper.as_str()) {
+        return Err(crate::errors::AppError::BadRequest(
+            format!("invalid FK action: {:?}", action)
+        ));
+    }
+    Ok(upper)
+}
+
+pub fn validate_index_method(m: &str) -> Result<String, crate::errors::AppError> {
+    let upper = m.trim().to_uppercase();
+    const ALLOWED: &[&str] = &["BTREE", "HASH", "GIN", "GIST", "BRIN"];
+    if !ALLOWED.contains(&upper.as_str()) {
+        return Err(crate::errors::AppError::BadRequest(
+            format!("invalid index method: {:?}", m)
+        ));
+    }
+    Ok(upper)
+}
+
 // ── DB helpers ────────────────────────────────────────────────────────────────
 
 /// Look up a project's schema_name. Returns NotFound if project doesn't exist.

@@ -117,6 +117,56 @@ pub fn build_router(state: AppState) -> Router {
             "/projects/:project_id/query-history",
             get(handlers::query_log::list_history),
         )
+        // ── Schema editor ──────────────────────────────────────────────────
+        .route(
+            "/projects/:project_id/schema/tables",
+            post(handlers::schema::create_table),
+        )
+        .route(
+            "/projects/:project_id/schema/tables/:table",
+            get(handlers::schema::get_table_structure)
+                .delete(handlers::schema::drop_table),
+        )
+        .route(
+            "/projects/:project_id/schema/tables/:table/rename",
+            post(handlers::schema::rename_table),
+        )
+        .route(
+            "/projects/:project_id/schema/tables/:table/columns",
+            post(handlers::schema::add_column),
+        )
+        .route(
+            "/projects/:project_id/schema/tables/:table/columns/:column",
+            delete(handlers::schema::drop_column),
+        )
+        .route(
+            "/projects/:project_id/schema/tables/:table/columns/:column/rename",
+            post(handlers::schema::rename_column),
+        )
+        .route(
+            "/projects/:project_id/schema/tables/:table/columns/:column/type",
+            post(handlers::schema::alter_column_type),
+        )
+        .route(
+            "/projects/:project_id/schema/tables/:table/foreign-keys",
+            post(handlers::schema::add_foreign_key),
+        )
+        .route(
+            "/projects/:project_id/schema/tables/:table/check-constraints",
+            post(handlers::schema::add_check_constraint),
+        )
+        .route(
+            "/projects/:project_id/schema/tables/:table/constraints/:constraint_name",
+            delete(handlers::schema::drop_constraint),
+        )
+        .route(
+            "/projects/:project_id/schema/tables/:table/indexes",
+            post(handlers::schema::create_index),
+        )
+        .route(
+            "/projects/:project_id/schema/indexes/:index_name",
+            delete(handlers::schema::drop_index),
+        )
         // ── Audit logs ─────────────────────────────────────────────────────
         .route("/audit-logs", get(handlers::audit::list_audit_logs))
         // ── Admin ──────────────────────────────────────────────────────────

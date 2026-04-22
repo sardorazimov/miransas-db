@@ -243,6 +243,117 @@ pub struct UpdateSavedQueryRequest {
     pub notes: Option<String>,
 }
 
+// ── Schema editor ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ColumnSpec {
+    pub name: String,
+    pub data_type: String,
+    pub nullable: Option<bool>,
+    pub default_value: Option<String>,
+    pub primary_key: Option<bool>,
+    pub unique: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateTableRequest {
+    pub name: String,
+    pub columns: Vec<ColumnSpec>,
+    pub if_not_exists: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddColumnRequest {
+    pub column: ColumnSpec,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RenameColumnRequest {
+    pub new_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AlterColumnTypeRequest {
+    pub new_type: String,
+    pub using: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RenameTableRequest {
+    pub new_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddForeignKeyRequest {
+    pub constraint_name: String,
+    pub column: String,
+    pub references_table: String,
+    pub references_column: String,
+    pub on_delete: Option<String>,
+    pub on_update: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateIndexRequest {
+    pub index_name: String,
+    pub columns: Vec<String>,
+    pub unique: Option<bool>,
+    pub method: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddCheckConstraintRequest {
+    pub constraint_name: String,
+    pub expression: String,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct ColumnInfo {
+    pub column_name: String,
+    pub data_type: String,
+    pub is_nullable: String,
+    pub column_default: Option<String>,
+    pub character_maximum_length: Option<i32>,
+    pub ordinal_position: i32,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct ConstraintInfo {
+    pub constraint_name: String,
+    pub constraint_type: String,
+    pub column_names: Option<String>,
+    pub foreign_table: Option<String>,
+    pub foreign_columns: Option<String>,
+    pub check_clause: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct IndexInfo {
+    pub index_name: String,
+    pub column_names: Option<String>,
+    pub is_unique: bool,
+    pub index_method: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TableStructureResponse {
+    pub schema: String,
+    pub table: String,
+    pub columns: Vec<ColumnInfo>,
+    pub constraints: Vec<ConstraintInfo>,
+    pub indexes: Vec<IndexInfo>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct DropTableQuery {
+    pub cascade: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct DropColumnQuery {
+    pub cascade: Option<bool>,
+}
+
 // ── Query history ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
